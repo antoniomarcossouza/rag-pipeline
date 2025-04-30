@@ -1,4 +1,10 @@
+from datetime import datetime
+
 import arxiv
+from langchain_ollama import OllamaEmbeddings
+from langchain_postgres import Column, PGEngine, PGVectorStore
+
+from .sql import DatabaseConnection
 
 
 def process_paper(result: arxiv.Result):
@@ -53,3 +59,44 @@ def get_insert_papers_query(papers: list) -> str:
 """
 
     return query
+
+
+def arxiv_etl(
+    db: DatabaseConnection,
+    subject: str,
+    results: int,
+) -> None:
+    db.action_query(
+        query=get_insert_papers_query(get_arxiv_papers(subject, results))
+    )
+
+
+async def init_arxiv_vectorstore_table(engine: PGEngine) -> None:
+    await engine.ainit_vectorstore_table(
+        table_name="tbl_document_chunks",
+        vector_size=2048,
+        metadata_columns=[
+            Column("doc_id", "INTEGER"),
+            Column("created_at", "TIMESTAMP"),
+        ],
+    )
+
+
+async def create_arxiv_vectorstore(engine: PGEngine) -> PGVectorStore:
+    return await PGVectorStore.create(
+        engine=engine,
+        embedding_service=OllamaEmbeddings(model="llama3.2:1b"),
+        table_name="tbl_document_chunks",
+        metadata_columns=["doc_id", "created_at"],
+    )
+
+
+def treat_arxiv_metadata(metadata: dict, record_id: int) -> dict:
+    return {
+        "doc_id": record_id,
+        "page": metadata["page"],
+        "total_pages": metadata["total_pages"],
+        "created_at": datetime.fromisoformat(metadata["creationdate"]).replace(
+            tzinfo=None
+        ),
+    }
